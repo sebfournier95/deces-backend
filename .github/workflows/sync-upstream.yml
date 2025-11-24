@@ -99,7 +99,7 @@ jobs:
           git fetch upstream
           git fetch origin fork-dev:fork-dev
           git checkout -B fork-dev origin/fork-dev
-          git merge upstream/master --no-edit
+          git merge upstream/dev --no-edit
           git push origin fork-dev
 
       - name: Notifier Discord - Succès

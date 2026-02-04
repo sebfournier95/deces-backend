@@ -17,8 +17,6 @@ interface MailConfig {
 }
 
 let disposableMails: string[] = [];
-let sendMail: string[] = [];
-
 
 try {
   disposableMails = readFileSync(`${process.env.DISPOSABLE_MAIL}`,'utf8').split("\n");
@@ -56,10 +54,11 @@ const log = (json:any) => {
 interface OTPEntry {
   code: string;
   lastSendTime?: number;
+  recentSendCount: number;
 }
 
 const OTP: Record<string, OTPEntry> = {};
-const OTP_RATE_LIMIT_MS = 60000; // 1 minute rate limit
+const OTP_RATE_LIMIT_MS = 60000; // 1 minute base rate limit
 
 const generateOTP = (email: string) => {
     const digits = '0123456789';
@@ -68,7 +67,8 @@ const generateOTP = (email: string) => {
         tmp += digits[Math.floor(Math.random() * 10)];
     }
     OTP[email] = {
-      code: tmp
+      code: tmp,
+      recentSendCount: 0
     };
     // Durée de validité du code (6h)
     setTimeout(() => {delete OTP[email]}, 6 * 60 * 60 * 1000);
@@ -84,12 +84,22 @@ export const sendOTP = async (email: string): Promise<sendOTPResponse> => {
         };
       } else if (email in OTP && OTP[email].lastSendTime) {
         const timeSinceLastSend = Date.now() - OTP[email].lastSendTime!;
+        let rateLimit = OTP_RATE_LIMIT_MS;
+        
+        // If lastSendTime is recent (< 1 minute), apply exponential backoff
         if (timeSinceLastSend < OTP_RATE_LIMIT_MS) {
-          const secondsLeft = Math.ceil((OTP_RATE_LIMIT_MS - timeSinceLastSend) / 1000);
+          rateLimit = OTP_RATE_LIMIT_MS * Math.pow(2, OTP[email].recentSendCount);
+        }
+        
+        if (timeSinceLastSend < rateLimit) {
+          const secondsLeft = Math.ceil((rateLimit - timeSinceLastSend) / 1000);
           return {
             msg: `Veuillez attendre ${secondsLeft} secondes avant de renvoyer un code`,
             valid: false
           };
+        } else {
+          // Reset failed attempts after rate limit period has passed
+          OTP[email].recentSendCount = 0;
         }
       }
       generateOTP(email);
@@ -100,8 +110,9 @@ export const sendOTP = async (email: string): Promise<sendOTPResponse> => {
           from: process.env.API_EMAIL,
           to: `${email}`,
       } as any);
-      // Only set lastSendTime after successful mail send
+      // Only increment recentSendCount after successful mail send
       OTP[email].lastSendTime = Date.now();
+      OTP[email].recentSendCount++;
       return {
         msg: "Un code vous a été envoyé à l'adresse indiquée",
         valid: true

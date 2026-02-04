@@ -17,6 +17,8 @@ interface MailConfig {
 }
 
 let disposableMails: string[] = [];
+let sendMail: string[] = [];
+
 
 try {
   disposableMails = readFileSync(`${process.env.DISPOSABLE_MAIL}`,'utf8').split("\n");
@@ -51,7 +53,13 @@ const log = (json:any) => {
     }));
 }
 
-const OTP:any = {};
+interface OTPEntry {
+  code: string;
+  lastSendTime?: number;
+}
+
+const OTP: Record<string, OTPEntry> = {};
+const OTP_RATE_LIMIT_MS = 60000; // 1 minute rate limit
 
 const generateOTP = (email: string) => {
     const digits = '0123456789';
@@ -59,7 +67,9 @@ const generateOTP = (email: string) => {
     for (let i = 0; i < 6; i++ ) {
         tmp += digits[Math.floor(Math.random() * 10)];
     }
-    OTP[email] = tmp;
+    OTP[email] = {
+      code: tmp
+    };
     // Durée de validité du code (6h)
     setTimeout(() => {delete OTP[email]}, 6 * 60 * 60 * 1000);
 }
@@ -72,20 +82,30 @@ export const sendOTP = async (email: string): Promise<sendOTPResponse> => {
           msg: "Le courriel fourni appartient à un fournisseur d'addresses temporaires",
           valid: false
         };
-      } else {
-        generateOTP(email);
-        const hash = crypto.createHash('sha256').update(email).digest('hex').substring(0, 16)
-        await transporter.sendMail({
-            subject: `Validez votre identité - ${process.env.APP_DNS} - ${hash}`,
-            text: `Votre code, valide 6 heures: ${OTP[email] as string}`,
-            from: process.env.API_EMAIL,
-            to: `${email}`,
-        } as any);
-        return {
-          msg: "Un code vous a été envoyé à l'adresse indiquée",
-          valid: true
-        };
+      } else if (email in OTP && OTP[email].lastSendTime) {
+        const timeSinceLastSend = Date.now() - OTP[email].lastSendTime!;
+        if (timeSinceLastSend < OTP_RATE_LIMIT_MS) {
+          const secondsLeft = Math.ceil((OTP_RATE_LIMIT_MS - timeSinceLastSend) / 1000);
+          return {
+            msg: `Veuillez attendre ${secondsLeft} secondes avant de renvoyer un code`,
+            valid: false
+          };
+        }
       }
+      generateOTP(email);
+      const hash = crypto.createHash('sha256').update(email).digest('hex').substring(0, 16)
+      await transporter.sendMail({
+          subject: `Validez votre identité - ${process.env.APP_DNS} - ${hash}`,
+          text: `Votre code, valide 6 heures: ${OTP[email].code}`,
+          from: process.env.API_EMAIL,
+          to: `${email}`,
+      } as any);
+      // Only set lastSendTime after successful mail send
+      OTP[email].lastSendTime = Date.now();
+      return {
+        msg: "Un code vous a été envoyé à l'adresse indiquée",
+        valid: true
+      };
     } catch (err) {
         log({
             error: "SendOTP error",
@@ -99,7 +119,7 @@ export const sendOTP = async (email: string): Promise<sendOTPResponse> => {
 }
 
 export const validateOTP = (email:string,otp:string): boolean => {
-    if (otp && (OTP[email] === otp)) {
+    if (otp && OTP[email] && (OTP[email].code === otp)) {
         delete OTP[email];
         return true;
     }

@@ -36,7 +36,7 @@ describe('mail.ts - Sending emails', () => {
     res = await sendOTP("recipient@example.com")
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     expect(res.valid).to.be.true;
-    
+
     // Test rate limit: second send should fail with rate limit message
     res = await sendOTP("recipient@example.com")
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
